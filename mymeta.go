@@ -30,7 +30,7 @@ func (m *MyMeta) TableExists(tablename string) (bool, error) {
 	return m.DBHelper.Exists(fmt.Sprintf("SHOW TABLES LIKE '%s'", tablename))
 }
 func (m *MyMeta) DropPrimaryKey(tablename, pkConstraintName string) error {
-	_, err := m.DBHelper.Exec(fmt.Sprintf("ALTER TABLE '%s' DROP PRIMARY KEY", tablename))
+	_, err := m.DBHelper.Exec(fmt.Sprintf("ALTER TABLE %s DROP PRIMARY KEY", tablename))
 	return err
 }
 func (m *MyMeta) DropIndex(tablename, indexname string) error {
@@ -128,7 +128,11 @@ func (m *MyMeta) CreateIndex(tableName, indexName string, columns []string, uniq
 	if unique {
 		uniqueStr = "UNIQUE"
 	}
-	_, err := m.DBHelper.Exec(fmt.Sprintf("CREATE %sINDEX %s ON %s(%s)", uniqueStr, indexName, tableName, strings.Join(columns, ",")))
+	commentStr := ""
+	if !desc.IsEmpty() {
+		commentStr = fmt.Sprintf("\nCOMMENT %s", m.StringExpress(desc.String()))
+	}
+	_, err := m.DBHelper.Exec(fmt.Sprintf("CREATE %sINDEX %s ON %s(%s)%s", uniqueStr, indexName, tableName, strings.Join(columns, ","), commentStr))
 	return err
 }
 func (m *MyMeta) CreateTable(table *dbhelper.DataTable) error {
@@ -143,8 +147,13 @@ func (m *MyMeta) CreateTable(table *dbhelper.DataTable) error {
 	if !table.Desc.IsEmpty() {
 		commentStr = fmt.Sprintf("\nCOMMENT %s", m.StringExpress(table.Desc.String()))
 	}
-	_, err := m.DBHelper.Exec(fmt.Sprintf("CREATE TABLE %s(\n%s\n)%s", table.TableName, strings.Join(creates, ","), commentStr))
-	return err
+	if table.Temporary {
+		_, err := m.DBHelper.Exec(fmt.Sprintf("CREATE TEMPORARY TABLE %s(\n%s\n)%s", table.TableName, strings.Join(creates, ","), commentStr))
+		return err
+	} else {
+		_, err := m.DBHelper.Exec(fmt.Sprintf("CREATE TABLE %s(\n%s\n)%s", table.TableName, strings.Join(creates, ","), commentStr))
+		return err
+	}
 }
 func (m *MyMeta) AddColumn(tablename string, column *dbhelper.TableColumn) error {
 	_, err := m.DBHelper.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", tablename, column.Name, m.getColumnDefine(column.Type, column.MaxSize, column.NotNull, column.Desc)))
