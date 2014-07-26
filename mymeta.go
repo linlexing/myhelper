@@ -3,33 +3,33 @@ package myhelper
 import (
 	"bytes"
 	"fmt"
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/linlexing/datatable.go"
 	"github.com/linlexing/dbhelper"
+	"regexp"
 	"strings"
+	"text/template"
 )
 
 type MyMeta struct {
 	*dbhelper.RootMeta
 }
 
+func init() {
+	dbhelper.RegisterMetaHelper("mysql", NewMyMeta())
+}
+
 func NewMyMeta() *MyMeta {
 	return &MyMeta{&dbhelper.RootMeta{}}
 }
 func (m *MyMeta) ParamPlaceholder(strSql string, num int) string {
-	if num == 0 {
-		return strSql
-	}
-	pp := make([]interface{}, num)
-	for i := 0; i < num; i++ {
-		pp[i] = "?"
-	}
-	return fmt.Sprintf(strSql, pp...)
+	return regexp.MustCompile(`\$\d+`).ReplaceAllString(strSql, "?")
 }
 
 func (m *MyMeta) TableExists(tablename string) (bool, error) {
 	return m.DBHelper.Exists(fmt.Sprintf("SHOW TABLES LIKE '%s'", tablename))
 }
-func (m *MyMeta) DropPrimaryKey(tablename, pkConstraintName string) error {
+func (m *MyMeta) DropPrimaryKey(tablename string) error {
 	_, err := m.DBHelper.Exec(fmt.Sprintf("ALTER TABLE %s DROP PRIMARY KEY", tablename))
 	return err
 }
@@ -168,7 +168,7 @@ func (m *MyMeta) GetTableDesc(tablename string) (dbhelper.DBDesc, error) {
 SELECT table_comment
 FROM INFORMATION_SCHEMA.TABLES
 WHERE table_schema=SCHEMA()
-AND table_name=%s`, tablename)
+AND table_name=$1`, tablename)
 	if err != nil {
 		return nil, err
 	}
@@ -188,7 +188,7 @@ SELECT index_name,
 	GROUP_CONCAT(column_name ORDER BY seq_in_index) AS columns
 FROM information_schema.statistics
 WHERE table_schema =schema() and
-	table_name = %s and
+	table_name = $1 and
 	index_name <>'PRIMARY'
 GROUP BY table_name,index_name`, tablename)
 	if err != nil {
@@ -217,7 +217,7 @@ func (m *MyMeta) GetColumns(tablename string) ([]*dbhelper.TableColumn, error) {
 SELECT column_name,data_type,character_maximum_length,numeric_precision,is_nullable,column_comment
 FROM INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA=SCHEMA() AND
-	table_name=%s`, tablename)
+	table_name=$1`, tablename)
 	if err != nil {
 		return nil, err
 	}
@@ -268,10 +268,89 @@ SELECT
 	GROUP_CONCAT(column_name ORDER BY seq_in_index) AS columns
 FROM information_schema.statistics
 WHERE table_schema =schema() and
-	table_name = %s and
+	table_name = $1 and
 	index_name ='PRIMARY'`, tablename)
 	if err != nil {
 		return nil, err
 	}
 	return strings.Split(pks.(string), ","), nil
+}
+func (m *MyMeta) Merge(dest, source string, colNames []string, pkColumns []string, autoRemove bool, sqlWhere string) error {
+	if len(pkColumns) == 0 {
+		return fmt.Errorf("the primary keys is empty")
+	}
+	if len(colNames) == 0 {
+		return fmt.Errorf("the columns is empty")
+	}
+	tmp := template.New("sql")
+	tmp.Funcs(template.FuncMap{
+		"Join": func(value []string, sep, prefix string) string {
+			if prefix == "" {
+				return strings.Join(value, sep)
+			} else {
+				rev := make([]string, len(value))
+				for i, v := range value {
+					rev[i] = prefix + v
+				}
+				return strings.Join(rev, sep)
+			}
+		},
+		"First": func(value []string) string {
+			return value[0]
+		},
+	})
+	tmp, err := tmp.Parse(`
+{{if .autoRemove}}
+DELETE dest FROM {{.destTable}} dest WHERE{{if ne .sqlWhere ""}}
+    ({{.sqlWhere}}) AND {{end}}
+    NOT EXISTS(
+        SELECT 1 FROM {{.sourceTable}} src WHERE{{range $idx,$colName :=.pkColumns}}
+            {{if gt $idx 0}}AND {{end}}dest.{{$colName}}=src.{{$colName}}{{end}}
+    );
+go
+{{end}}
+INSERT INTO {{.destTable}}(
+    {{Join .colNames ",\n    " ""}}
+)
+SELECT
+    {{Join .colNames ",\n    " "src."}}
+FROM
+    {{.sourceTable}} src
+ON DUPLICATE KEY UPDATE{{range $idx,$colName :=.updateColumns}}
+	{{if gt $idx 0}},{{end}}{{$colName}}=src.{{$colName}}
+	{{end}};`)
+	if err != nil {
+		return err
+	}
+	var b bytes.Buffer
+	//primary key not update
+	updateColumns := []string{}
+
+	for _, v := range colNames {
+		bFound := false
+		for _, pv := range pkColumns {
+			if v == pv {
+				bFound = true
+				break
+			}
+		}
+		if !bFound {
+			updateColumns = append(updateColumns, v)
+		}
+	}
+
+	param := map[string]interface{}{
+		"destTable":     dest,
+		"sourceTable":   source,
+		"updateColumns": updateColumns,
+		"colNames":      colNames,
+		"autoRemove":    autoRemove,
+		"sqlWhere":      sqlWhere,
+		"pkColumns":     pkColumns,
+	}
+	if err := tmp.Execute(&b, param); err != nil {
+		return err
+	}
+	err = m.DBHelper.GoExec(b.String())
+	return err
 }
