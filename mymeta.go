@@ -6,7 +6,6 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/linlexing/datatable.go"
 	"github.com/linlexing/dbhelper"
-	"regexp"
 	"strings"
 	"text/template"
 )
@@ -22,8 +21,11 @@ func init() {
 func NewMyMeta() *MyMeta {
 	return &MyMeta{&dbhelper.RootMeta{}}
 }
-func (m *MyMeta) ParamPlaceholder(strSql string, num int) string {
-	return regexp.MustCompile(`\$\d+`).ReplaceAllString(strSql, "?")
+func (m *MyMeta) ParamPlaceholder(num int) string {
+	return "?"
+}
+func (m *MyMeta) RegLike(value, strRegLike string) string {
+	return value + " REGEXP " + strRegLike
 }
 
 func (m *MyMeta) TableExists(tablename string) (bool, error) {
