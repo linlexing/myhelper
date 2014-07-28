@@ -256,7 +256,7 @@ WHERE TABLE_SCHEMA=SCHEMA() AND
 		} else {
 			rev[i].NotNull = true
 		}
-		if row["column_comment"] != nil || row["column_comment"].(string) != "" {
+		if row["column_comment"] != nil && row["column_comment"].(string) != "" {
 			desc := dbhelper.DBDesc{}
 			desc.Parse(row["column_comment"].(string))
 			rev[i].Desc = desc
