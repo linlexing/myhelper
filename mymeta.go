@@ -170,16 +170,23 @@ func (m *MyMeta) GetTableDesc(tablename string) (dbhelper.DBDesc, error) {
 SELECT table_comment
 FROM INFORMATION_SCHEMA.TABLES
 WHERE table_schema=SCHEMA()
-AND table_name=$1`, tablename)
+AND table_name={{ph}}`, tablename)
 	if err != nil {
 		return nil, err
 	}
-	if rev == nil || rev.(string) == "" {
+	switch tv := rev.(type) {
+	case nil:
 		return dbhelper.DBDesc{}, nil
-	} else {
+	case []byte:
 		v := dbhelper.DBDesc{}
-		v.Parse(rev.(string))
+		v.Parse(string(tv))
 		return v, nil
+	case string:
+		v := dbhelper.DBDesc{}
+		v.Parse(tv)
+		return v, nil
+	default:
+		return nil, fmt.Errorf("the value %v(%T) not is string", tv, tv)
 	}
 }
 func (m *MyMeta) GetIndexes(tablename string) ([]*dbhelper.TableIndex, error) {
@@ -190,7 +197,7 @@ SELECT index_name,
 	GROUP_CONCAT(column_name ORDER BY seq_in_index) AS columns
 FROM information_schema.statistics
 WHERE table_schema =schema() and
-	table_name = $1 and
+	table_name = {{ph}} and
 	index_name <>'PRIMARY'
 GROUP BY table_name,index_name`, tablename)
 	if err != nil {
@@ -215,11 +222,24 @@ GROUP BY table_name,index_name`, tablename)
 	return rev, nil
 }
 func (m *MyMeta) GetColumns(tablename string) ([]*dbhelper.TableColumn, error) {
-	table, err := m.DBHelper.GetData(`
-SELECT column_name,data_type,character_maximum_length,numeric_precision,is_nullable,column_comment
+	table := dbhelper.NewDataTable("table")
+	table.AddColumn(dbhelper.NewDataColumn("column_name", datatable.String, 0, true))
+	table.AddColumn(dbhelper.NewDataColumn("data_type", datatable.String, 0, true))
+	table.AddColumn(dbhelper.NewDataColumn("character_maximum_length", datatable.Int64, 0, false))
+	table.AddColumn(dbhelper.NewDataColumn("numeric_precision", datatable.Int64, 0, false))
+	table.AddColumn(dbhelper.NewDataColumn("is_nullable", datatable.String, 0, true))
+	table.AddColumn(dbhelper.NewDataColumn("column_comment", datatable.String, 0, false))
+	err := m.DBHelper.FillTable(table, `
+SELECT
+	column_name,
+	data_type,
+	character_maximum_length,
+	numeric_precision,
+	is_nullable,
+	column_comment
 FROM INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA=SCHEMA() AND
-	table_name=$1`, tablename)
+	table_name={{ph}}`, tablename)
 	if err != nil {
 		return nil, err
 	}
@@ -270,12 +290,21 @@ SELECT
 	GROUP_CONCAT(column_name ORDER BY seq_in_index) AS columns
 FROM information_schema.statistics
 WHERE table_schema =schema() and
-	table_name = $1 and
+	table_name = {{ph}} and
 	index_name ='PRIMARY'`, tablename)
 	if err != nil {
 		return nil, err
 	}
-	return strings.Split(pks.(string), ","), nil
+	switch tv := pks.(type) {
+	case nil:
+		return []string{}, nil
+	case string:
+		return strings.Split(tv, ","), nil
+	case []byte:
+		return strings.Split(string(tv), ","), nil
+	default:
+		return nil, fmt.Errorf("the value %v(%T) not is string", tv, tv)
+	}
 }
 func (m *MyMeta) Merge(dest, source string, colNames []string, pkColumns []string, autoRemove bool, sqlWhere string) error {
 	if len(pkColumns) == 0 {
@@ -317,10 +346,10 @@ INSERT INTO {{.destTable}}(
 SELECT
     {{Join .colNames ",\n    " "src."}}
 FROM
-    {{.sourceTable}} src
+    {{.sourceTable}} src{{if gt (len .updateColumns) 0}}
 ON DUPLICATE KEY UPDATE{{range $idx,$colName :=.updateColumns}}
 	{{if gt $idx 0}},{{end}}{{$colName}}=src.{{$colName}}
-	{{end}};`)
+	{{end}}{{end}};`)
 	if err != nil {
 		return err
 	}
@@ -355,4 +384,7 @@ ON DUPLICATE KEY UPDATE{{range $idx,$colName :=.updateColumns}}
 	}
 	err = m.DBHelper.GoExec(b.String())
 	return err
+}
+func (m *MyMeta) StringCat(values ...string) string {
+	return fmt.Sprintf("concat(%s)", strings.Join(values, ","))
 }
