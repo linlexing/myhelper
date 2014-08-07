@@ -306,7 +306,7 @@ WHERE table_schema =schema() and
 		return nil, fmt.Errorf("the value %v(%T) not is string", tv, tv)
 	}
 }
-func (m *MyMeta) Merge(dest, source string, colNames []string, pkColumns []string, autoRemove bool, sqlWhere string) error {
+func (m *MyMeta) Merge(dest, source string, colNames []string, pkColumns []string, autoUpate, autoRemove bool, sqlWhere string) error {
 	if len(pkColumns) == 0 {
 		return fmt.Errorf("the primary keys is empty")
 	}
@@ -340,13 +340,13 @@ DELETE dest FROM {{.destTable}} dest WHERE{{if ne .sqlWhere ""}}
     );
 go
 {{end}}
-INSERT INTO {{.destTable}}(
+INSERT {{if not (and .autoUpdate (gt (len .updateColumns) 0))}}IGNORE{{end}} INTO {{.destTable}}(
     {{Join .colNames ",\n    " ""}}
 )
 SELECT
     {{Join .colNames ",\n    " "src."}}
 FROM
-    {{.sourceTable}} src{{if gt (len .updateColumns) 0}}
+    {{.sourceTable}} src{{if and .autoUpdate (gt (len .updateColumns) 0)}}
 ON DUPLICATE KEY UPDATE{{range $idx,$colName :=.updateColumns}}
 	{{if gt $idx 0}},{{end}}{{$colName}}=src.{{$colName}}
 	{{end}}{{end}};`)
@@ -375,6 +375,7 @@ ON DUPLICATE KEY UPDATE{{range $idx,$colName :=.updateColumns}}
 		"sourceTable":   source,
 		"updateColumns": updateColumns,
 		"colNames":      colNames,
+		"autoUpdate":    autoUpate,
 		"autoRemove":    autoRemove,
 		"sqlWhere":      sqlWhere,
 		"pkColumns":     pkColumns,
